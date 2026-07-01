@@ -132,6 +132,21 @@ Features include:
 
 ---
 
+## Lightweight Knowledge Base Integration
+
+To demonstrate future tool/function calling capabilities, the application includes a small SQLite-backed knowledge base containing sample support articles and FAQs.
+
+Rather than relying solely on the LLM's internal knowledge, the assistant can retrieve verified information from the database for common support queries such as:
+
+- Password reset instructions
+- Subscription activation
+- Refund policy
+- Account recovery
+- Contact information
+
+When a user's query matches a supported topic, the backend performs a lookup against the SQLite knowledge base and incorporates the retrieved information into the final response. This demonstrates how the system can be extended into an AI agent that grounds its responses in trusted organizational data instead of generating unsupported answers.
+
+Current implementation serves as a proof of concept and can be expanded into a full enterprise knowledge base or integrated with external documentation systems in the future.
 
 # Example Response
 
