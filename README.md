@@ -26,6 +26,13 @@ The application supports both **single-message analysis** and **batch CSV/JSON p
 
 ---
 
+## Documentation
+
+Expected output can be found here:
+
+**Google Docs:** https://docs.google.com/document/d/1HeDtoUGIxYdHmDok4zW8SBB-99oUCFgD9vduNmLN_70/edit?usp=sharing
+
+
 # Technology Stack
 
 ### Backend
