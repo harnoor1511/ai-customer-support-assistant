@@ -32,6 +32,7 @@ from app.schemas.support import (
     SupportResponse,
 )
 from app.services.conversation_store import append_turn, get_history
+from app.services.kb_service import KBService, get_kb_service
 from app.services.llm_service import LLMClient, LLMError
 from app.tools.support_tools import TOOL_SCHEMAS, execute_tool
 
@@ -40,6 +41,11 @@ logger = logging.getLogger(__name__)
 # Deterministic guardrails, enforced in code regardless of what the LLM says.
 LOW_CONFIDENCE_THRESHOLD = 0.6
 ALWAYS_ESCALATE_PRIORITIES = {Priority.P0, Priority.P1}
+
+# Cosine similarity a query's best KB match must reach to be returned
+# directly, skipping the LLM call entirely. Kept here as a fallback
+# default; the live value comes from Settings (see SupportService.__init__).
+DEFAULT_KB_SIMILARITY_THRESHOLD = 0.75
 
 _INJECTION_PATTERN = re.compile(
     r"\b(prompt injection|manipulat(e|ion) attempt|ignore (previous|prior) instructions|"
@@ -67,22 +73,68 @@ class SupportServiceError(Exception):
 
 
 class SupportService:
-    def __init__(self, llm_client: LLMClient):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        kb_service: KBService | None = None,
+        kb_similarity_threshold: float = DEFAULT_KB_SIMILARITY_THRESHOLD,
+    ):
         self._llm_client = llm_client
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_LLM_CALLS)
+        self._kb_service = kb_service if kb_service is not None else get_kb_service()
+        self._kb_similarity_threshold = kb_similarity_threshold
 
     async def triage_message(self, request: SupportRequest) -> SupportResponse:
         conversation_id = request.conversation_id
-        history = get_history(conversation_id) if conversation_id else None
 
-        response = await self._call_llm_with_retry(request.message, history=history)
-        response = self._apply_guardrails(response)
+        kb_response = self._try_kb_answer(request.message)
+        if kb_response is not None:
+            response = kb_response
+        else:
+            history = get_history(conversation_id) if conversation_id else None
+            response = await self._call_llm_with_retry(request.message, history=history)
+            response = self._apply_guardrails(response)
 
         if conversation_id:
             append_turn(conversation_id, "user", request.message)
             append_turn(conversation_id, "assistant", response.reply)
 
         return response
+
+    def _try_kb_answer(self, message: str) -> SupportResponse | None:
+        """Checks the FAQ knowledge base for a confident direct match.
+
+        Returns a ready-to-send SupportResponse if the best match's
+        cosine similarity clears the configured threshold, else None
+        (caller should fall through to the LLM).
+        """
+        if not self._kb_service.is_ready:
+            return None
+
+        match = self._kb_service.best_match(message)
+        if match is None:
+            return None
+
+        entry, score = match
+        score = max(0.0, min(1.0, score))
+        if score < self._kb_similarity_threshold:
+            return None
+
+        logger.info(
+            "KB hit (score=%.3f >= %.3f): matched question '%s' [%s / %s]",
+            score, self._kb_similarity_threshold, entry.question, entry.product, entry.section,
+        )
+
+        return SupportResponse(
+            reply=entry.answer,
+            category=Category.GENERAL_QUESTION,
+            priority=Priority.P3,
+            summary=f"Answered directly from knowledge base (matched FAQ: \"{entry.question}\").",
+            suggested_action="No action needed — answered from knowledge base.",
+            needs_human=False,
+            confidence=score,
+            sentiment=Sentiment.NEUTRAL,
+        )
 
     async def triage_batch(self, items: list[BatchMessageItem]) -> BatchSupportResponse:
         """Triage many messages concurrently. Never raises — every item gets
@@ -114,8 +166,12 @@ class SupportService:
                 if not item.message or not item.message.strip():
                     raise SupportServiceError("Empty message")
 
-                response = await self._call_llm_with_retry(item.message)
-                response = self._apply_guardrails(response)
+                kb_response = self._try_kb_answer(item.message)
+                if kb_response is not None:
+                    response = kb_response
+                else:
+                    response = await self._call_llm_with_retry(item.message)
+                    response = self._apply_guardrails(response)
                 latency_ms = int((time.perf_counter() - start) * 1000)
                 return BatchResultItem(
                     id=item.id,

@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     batch_request_delay_seconds: float = 1.5
     batch_max_retries_per_message: int = 3
 
+    # --- Knowledge-base semantic search ---
+    # Cosine similarity (0-1) a query's best KB match must reach to be
+    # returned directly, skipping the LLM call entirely.
+    kb_similarity_threshold: float = 0.75
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

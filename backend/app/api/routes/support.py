@@ -30,7 +30,10 @@ MAX_BATCH_FILE_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB is plenty for a few hundred 
 def get_support_service() -> SupportService:
     """Dependency provider — easy to swap/mock the LLM client in tests."""
     settings = get_settings()
-    return SupportService(llm_client=get_llm_client(settings))
+    return SupportService(
+        llm_client=get_llm_client(settings),
+        kb_similarity_threshold=settings.kb_similarity_threshold,
+    )
 
 
 @router.post("/triage", response_model=SupportResponse)
